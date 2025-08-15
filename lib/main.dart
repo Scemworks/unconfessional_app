@@ -1,3 +1,4 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -5,6 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:math';
 import 'package:intl/intl.dart';
+
+// --- Game Imports ---
+import 'games/guess_num_game.dart';
+import 'games/memory_game.dart';
+import 'games/tic_tac_toe_game.dart';
 
 // --- Models ---
 class Entry {
@@ -15,6 +21,7 @@ class Entry {
   final DateTime createdAt;
   int failureCount;
   int? lockoutUntil;
+  bool isDeciphered;
 
   Entry({
     required this.id,
@@ -24,6 +31,7 @@ class Entry {
     required this.createdAt,
     this.failureCount = 0,
     this.lockoutUntil,
+    this.isDeciphered = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -241,8 +249,53 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
   void _showEntryDetail(Entry entry) {
     showDialog(
       context: context,
-      builder: (context) => EntryDetailModal(entry: entry),
+      builder: (context) => EntryDetailModal(
+        entry: entry,
+        onAttemptDecipher: () {
+          _startDecipherAttempt(entry);
+        },
+      ),
     );
+  }
+
+  void _startDecipherAttempt(Entry entry) {
+    Navigator.of(context).pop(); // Close the detail modal
+    final games = [
+      GuessNumGame(onGameEnd: (won) => _handleGameEnd(entry, won)),
+      MemoryGame(onGameEnd: (won) => _handleGameEnd(entry, won)),
+      TicTacToeGame(onGameEnd: (won) => _handleGameEnd(entry, won)),
+    ];
+    final randomGame = games[Random().nextInt(games.length)];
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        child: randomGame,
+      ),
+    );
+  }
+
+  void _handleGameEnd(Entry entry, bool won) {
+    Navigator.of(context).pop(); // Close the game modal
+    if (won) {
+      setState(() {
+        entry.isDeciphered = true;
+        entry.failureCount = 0;
+        entry.lockoutUntil = null;
+      });
+      _saveEntries();
+      _showEntryDetail(entry); // Re-show the detail modal, now deciphered
+    } else {
+      setState(() {
+        entry.failureCount++;
+        if (entry.failureCount >= 3) {
+          entry.lockoutUntil = DateTime.now().millisecondsSinceEpoch + 30000; // 30-second lockout
+        }
+      });
+      _saveEntries();
+      _showEntryDetail(entry); // Re-show the detail modal with updated failure count
+    }
   }
 
   @override
@@ -549,7 +602,8 @@ class OrnamentalBorder extends StatelessWidget {
 
 class EntryDetailModal extends StatefulWidget {
   final Entry entry;
-  const EntryDetailModal({super.key, required this.entry});
+  final VoidCallback onAttemptDecipher;
+  const EntryDetailModal({super.key, required this.entry, required this.onAttemptDecipher});
 
   @override
   State<EntryDetailModal> createState() => _EntryDetailModalState();
@@ -633,7 +687,7 @@ class _EntryDetailModalState extends State<EntryDetailModal> {
               ),
               child: SingleChildScrollView(
                 child: Text(
-                  widget.entry.content,
+                  widget.entry.isDeciphered ? widget.entry.actualContent : widget.entry.content,
                   style: GoogleFonts.inconsolata(fontSize: 16),
                 ),
               ),
@@ -655,9 +709,7 @@ class _EntryDetailModalState extends State<EntryDetailModal> {
                 ),
               )
               : ElevatedButton.icon(
-                onPressed: () {
-                  // TODO: Implement game logic
-                },
+                onPressed: widget.onAttemptDecipher,
                 icon: const Icon(Icons.lock_open),
                 label: Text('Attempt to Decipher (${widget.entry.failureCount}/3)'),
                 style: ElevatedButton.styleFrom(
