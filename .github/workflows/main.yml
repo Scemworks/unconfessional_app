@@ -29,7 +29,9 @@ jobs:
       - name: Set Up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.2' # Pinning the version ensures consistent builds
+          # By removing the 'flutter-version' line, this action will automatically
+          # use the latest stable version of Flutter, which will have a
+          # compatible Dart SDK.
           channel: 'stable'
           cache: true # Enable caching to speed up subsequent builds
 
