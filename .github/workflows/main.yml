@@ -1,0 +1,68 @@
+# Name of the workflow
+name: "Build & Release Flutter App"
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push events but only for tags that start with 'v' (e.g., v1.0.0)
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: ubuntu-latest # Use the latest Ubuntu runner
+
+    steps:
+      # 1. Check out the repository code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Set up the Java environment (required for Android builds)
+      - name: Set Up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin' # A popular, open-source JDK distribution
+          java-version: '17'
+
+      # 3. Set up the Flutter environment
+      - name: Set Up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.2' # Pinning the version ensures consistent builds
+          channel: 'stable'
+          cache: true # Enable caching to speed up subsequent builds
+
+      # 4. Install Flutter project dependencies
+      - name: Install Dependencies
+        run: flutter pub get
+
+      # 5. Decode the Base64 keystore and create the keystore file
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/unconfessional-release-key.jks
+
+      # 6. Create the key.properties file with credentials from secrets
+      - name: Create key.properties
+        run: |
+          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
+          echo "storeFile=unconfessional-release-key.jks" >> android/key.properties
+
+      # 7. Build the release APK
+      - name: Build APK
+        run: flutter build apk --release
+
+      # 8. Build the release App Bundle (AAB)
+      - name: Build App Bundle
+        run: flutter build appbundle --release
+
+      # 9. Create a GitHub Release and upload the APK and AAB as artifacts
+      - name: Create Release and Upload Artifacts
+        uses: ncipollo/release-action@v1
+        with:
+          # The files to upload as assets to the release
+          artifacts: "build/app/outputs/flutter-apk/app-release.apk,build/app/outputs/bundle/release/app-release.aab"
+          # Use the built-in GITHUB_TOKEN for authentication
+          token: ${{ secrets.GITHUB_TOKEN }}
