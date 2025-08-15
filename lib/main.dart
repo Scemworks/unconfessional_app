@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:math';
+import 'package:intl/intl.dart';
 
 // --- Models ---
 class Entry {
@@ -123,6 +124,10 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
     _loadEntries();
 
     _contentController.addListener(_handleTextChange);
+    // Timer to check for expired lockouts
+    Timer.periodic(const Duration(seconds: 1), (timer) {
+      _checkLockouts();
+    });
   }
 
   @override
@@ -134,19 +139,40 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
     super.dispose();
   }
 
+  void _checkLockouts() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    bool needsUpdate = false;
+    for (var entry in _entries) {
+      if (entry.lockoutUntil != null && now > entry.lockoutUntil!) {
+        entry.lockoutUntil = null;
+        entry.failureCount = 0;
+        needsUpdate = true;
+      }
+    }
+    if (needsUpdate) {
+      setState(() {});
+      _saveEntries();
+    }
+  }
+
   void _handleTextChange() {
     final text = _contentController.text;
+    final selection = _contentController.selection;
+
     if (text.length > _actualContent.length) {
-      final char = text.substring(text.length - 1);
-      final scrambledChar = _scrambleChar(char);
-      _actualContent += char;
-      final newText = text.substring(0, text.length - 1) + scrambledChar;
+      final newChar = text.substring(selection.start - 1, selection.start);
+      final scrambledChar = _scrambleChar(newChar);
+
+      _actualContent = _actualContent.substring(0, selection.start - 1) + newChar + _actualContent.substring(selection.start - 1);
+      final newText = text.substring(0, selection.start - 1) + scrambledChar + text.substring(selection.start);
+
       _contentController.value = TextEditingValue(
         text: newText,
-        selection: TextSelection.collapsed(offset: newText.length),
+        selection: TextSelection.collapsed(offset: selection.start),
       );
     } else if (text.length < _actualContent.length) {
-      _actualContent = _actualContent.substring(0, text.length);
+      final start = selection.start;
+      _actualContent = _actualContent.substring(0, start) + _actualContent.substring(start + 1);
     }
   }
 
@@ -212,6 +238,13 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
     });
   }
 
+  void _showEntryDetail(Entry entry) {
+    showDialog(
+      context: context,
+      builder: (context) => EntryDetailModal(entry: entry),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
@@ -247,7 +280,7 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
               alignment: Alignment.centerRight,
               transform: Matrix4.identity()
               ..setEntry(3, 2, 0.001)
-              ..rotateY(_animation.value * -0.5), // pi / 2 is 90 degrees
+              ..rotateY(_animation.value * -pi / 2.2),
               child: _buildCoverPage(pageWidth, pageHeight, true),
             ),
             // Right Page (Content)
@@ -256,7 +289,7 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
                 alignment: Alignment.centerLeft,
                 transform: Matrix4.identity()
                 ..setEntry(3, 2, 0.001)
-                ..rotateY(_animation.value * 0.5 - 0.5),
+                ..rotateY(-pi / 2.2 + _animation.value * pi / 2.2),
                 child: _buildContentPage(pageWidth, pageHeight, true),
               ),
         ],
@@ -280,6 +313,7 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
     return Material(
       elevation: 10,
       child: Container(
+        key: const ValueKey('cover'),
         width: width,
         height: height,
         decoration: BoxDecoration(
@@ -367,6 +401,7 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
     return Material(
       elevation: 10,
       child: Container(
+        key: const ValueKey('content'),
         width: width,
         height: height,
         decoration: BoxDecoration(
@@ -437,9 +472,8 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
                           child: ListTile(
                             title: Text(entry.title.isEmpty ? 'Untitled' : entry.title, style: GoogleFonts.playfairDisplay(fontWeight: FontWeight.bold)),
                             subtitle: Text(entry.content, maxLines: 2, overflow: TextOverflow.ellipsis, style: GoogleFonts.inconsolata()),
-                            onTap: () {
-                              // TODO: Implement viewing entry
-                            },
+                            trailing: (entry.lockoutUntil ?? 0) > DateTime.now().millisecondsSinceEpoch ? const Icon(Icons.lock, color: Colors.red) : null,
+                            onTap: () => _showEntryDetail(entry),
                           ),
                         );
                       },
@@ -448,7 +482,7 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
                 ],
               ),
             ),
-            if (_isSpread)
+            if (isLargeScreen || _isSpread)
               Positioned(
                 left: 0,
                 bottom: 0,
@@ -507,6 +541,132 @@ class OrnamentalBorder extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class EntryDetailModal extends StatefulWidget {
+  final Entry entry;
+  const EntryDetailModal({super.key, required this.entry});
+
+  @override
+  State<EntryDetailModal> createState() => _EntryDetailModalState();
+}
+
+class _EntryDetailModalState extends State<EntryDetailModal> {
+  Timer? _timer;
+  late Duration _remainingTime;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateRemainingTime();
+    if (_isLocked()) {
+      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        _updateRemainingTime();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _updateRemainingTime() {
+    if (!_isLocked()) {
+      _timer?.cancel();
+      if (mounted) setState(() {});
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final remainingMillis = widget.entry.lockoutUntil! - now;
+    setState(() {
+      _remainingTime = Duration(milliseconds: remainingMillis > 0 ? remainingMillis : 0);
+    });
+  }
+
+  bool _isLocked() {
+    return widget.entry.lockoutUntil != null && widget.entry.lockoutUntil! > DateTime.now().millisecondsSinceEpoch;
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$twoDigitMinutes:$twoDigitSeconds";
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
+      backgroundColor: const Color(0xFFfdf6f7),
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.entry.title.isEmpty ? 'Untitled' : widget.entry.title,
+              style: GoogleFonts.playfairDisplay(fontSize: 28, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Created on: ${DateFormat.yMMMd().add_jm().format(widget.entry.createdAt)}',
+              style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              height: 200,
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: SingleChildScrollView(
+                child: Text(
+                  widget.entry.content,
+                  style: GoogleFonts.inconsolata(fontSize: 16),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Align(
+              alignment: Alignment.centerRight,
+              child: _isLocked()
+              ? Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade300),
+                ),
+                child: Text(
+                  '🔒 Locked for: ${_formatDuration(_remainingTime)}',
+                  style: GoogleFonts.inconsolata(color: Colors.red.shade800, fontWeight: FontWeight.bold),
+                ),
+              )
+              : ElevatedButton.icon(
+                onPressed: () {
+                  // TODO: Implement game logic
+                },
+                icon: const Icon(Icons.lock_open),
+                label: Text('Attempt to Decipher (${widget.entry.failureCount}/3)'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade200,
+                  foregroundColor: Colors.blue.shade900,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
