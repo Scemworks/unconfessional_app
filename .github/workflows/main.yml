@@ -13,6 +13,11 @@ jobs:
     name: Build & Release
     runs-on: ubuntu-latest # Use the latest Ubuntu runner
 
+    # Add this permissions block to grant the workflow write access to repository contents,
+    # which is required for creating a release and uploading assets.
+    permissions:
+      contents: write
+
     steps:
       # 1. Check out the repository code
       - name: Checkout Repository
