@@ -98,6 +98,7 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
   String _actualContent = "";
   List<Entry> _entries = [];
   bool _isLoaded = false;
+  bool _isGridView = true;
 
   // Scrambling logic
   static const Map<String, List<String>> keyboardRoulette = {
@@ -255,7 +256,14 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
           _startDecipherAttempt(entry);
         },
       ),
-    );
+    ).then((_) {
+      // After the dialog is closed, check if the entry was deciphered and reset it
+      if (entry.isDeciphered) {
+        setState(() {
+          entry.isDeciphered = false;
+        });
+      }
+    });
   }
 
   void _startDecipherAttempt(Entry entry) {
@@ -296,6 +304,32 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
       _saveEntries();
       _showEntryDetail(entry); // Re-show the detail modal with updated failure count
     }
+  }
+
+  void _clearAllMemories() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Burn Your Memories?'),
+        content: const Text('This will permanently destroy all of your sealed thoughts. This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Have Mercy'),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _entries.clear();
+              });
+              _saveEntries();
+              Navigator.of(context).pop();
+            },
+            child: const Text('Burn Them All', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -508,13 +542,66 @@ class _ConfessPageState extends State<ConfessPage> with SingleTickerProviderStat
                     ),
                   ),
                   const Divider(height: 40),
-                  Text(
-                    'Memories',
-                    style: GoogleFonts.playfairDisplay(fontSize: 24, fontWeight: FontWeight.bold),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Memories',
+                        style: GoogleFonts.playfairDisplay(fontSize: 24, fontWeight: FontWeight.bold),
+                      ),
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: Icon(Icons.grid_view, color: _isGridView ? Colors.pink.shade300 : Colors.grey),
+                            onPressed: () => setState(() => _isGridView = true),
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.view_list, color: !_isGridView ? Colors.pink.shade300 : Colors.grey),
+                            onPressed: () => setState(() => _isGridView = false),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_forever, color: Colors.red),
+                            onPressed: _clearAllMemories,
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                   Expanded(
                     child: _entries.isEmpty
                     ? const Text('Your scrambled thoughts will appear here once sealed.', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey))
+                    : _isGridView
+                    ? GridView.builder(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 3 / 2,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                      ),
+                      itemCount: _entries.length,
+                      itemBuilder: (context, index) {
+                        final entry = _entries[index];
+                        return Card(
+                          elevation: 1,
+                          child: InkWell(
+                            onTap: () => _showEntryDetail(entry),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(entry.title.isEmpty ? 'Untitled' : entry.title, style: GoogleFonts.playfairDisplay(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  const SizedBox(height: 4),
+                                  Expanded(child: Text(entry.content, style: GoogleFonts.inconsolata(), overflow: TextOverflow.ellipsis, maxLines: 2)),
+                                  if ((entry.lockoutUntil ?? 0) > DateTime.now().millisecondsSinceEpoch)
+                                    const Align(alignment: Alignment.bottomRight, child: Icon(Icons.lock, color: Colors.red, size: 16)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    )
                     : ListView.builder(
                       itemCount: _entries.length,
                       itemBuilder: (context, index) {
@@ -612,10 +699,23 @@ class EntryDetailModal extends StatefulWidget {
 class _EntryDetailModalState extends State<EntryDetailModal> {
   Timer? _timer;
   late Duration _remainingTime;
+  bool _isShowingDeciphered = false;
 
   @override
   void initState() {
     super.initState();
+    _isShowingDeciphered = widget.entry.isDeciphered;
+    if (_isShowingDeciphered) {
+      // Start a timer to re-scramble the text after 5 seconds
+      Future.delayed(const Duration(seconds: 5), () {
+        if (mounted) {
+          setState(() {
+            _isShowingDeciphered = false;
+            widget.entry.isDeciphered = false;
+          });
+        }
+      });
+    }
     _updateRemainingTime();
     if (_isLocked()) {
       _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -687,7 +787,7 @@ class _EntryDetailModalState extends State<EntryDetailModal> {
               ),
               child: SingleChildScrollView(
                 child: Text(
-                  widget.entry.isDeciphered ? widget.entry.actualContent : widget.entry.content,
+                  _isShowingDeciphered ? widget.entry.actualContent : widget.entry.content,
                   style: GoogleFonts.inconsolata(fontSize: 16),
                 ),
               ),
